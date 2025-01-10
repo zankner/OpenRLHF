@@ -14,7 +14,7 @@ def preprocess_data(data, input_template=None, input_key="input", apply_chat_tem
             prompt = input_template.format(prompt)
     return prompt
 
-
+import random
 class PromptDataset(Dataset):
     """
     Dataset for PPO model
@@ -54,4 +54,7 @@ class PromptDataset(Dataset):
         return length
 
     def __getitem__(self, idx):
-        return self.prompts[idx]
+        random.seed(idx)
+        test_cases = "[TEST CASE SEPARATOR]".join([str(idx) for _ in range(random.randint(1, 5))])
+        # test_cases = [str(idx) for _ in range(random.randint(1, 5))]
+        return {"prompt": self.prompts[idx], "test_cases": test_cases}
