@@ -180,6 +180,12 @@ class NaiveExperienceMaker(ABC):
         args = self.strategy.args
         # generate responses
         samples_list = self.generate_samples(all_prompts, **generate_kwargs)
+        for idx in range(len(samples_list)):
+            print("\n" + "="*100 + "\n")
+            print("PROMPTS\n")
+            print(self.tokenizer.batch_decode(samples_list[idx].prompt_token_ids, skip_special_tokens=False))
+            print("TEST CASES\n")
+            print(samples_list[idx].test_cases)
         torch.distributed.barrier()
 
         experiences = []
@@ -239,18 +245,27 @@ class NaiveExperienceMaker(ABC):
         return experiences
 
     @torch.no_grad()
-    def generate_samples(self, all_prompts: List[str], **generate_kwargs) -> List[Samples]:
+    def generate_samples(self, all_examples: dict, **generate_kwargs) -> List[Samples]:
         """
         Generate samples and return in batches.
         """
+        print(all_examples, "ALL EXAMPLES")
+        all_prompts = all_examples["prompts"]
+        all_test_cases = all_examples["test_cases"]
+
         assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
         self.actor.eval()
+
         # sample multiple response
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        all_test_cases = sum([[test_case] * args.n_samples_per_prompt for test_case in all_test_cases], [])
         samples_list = []
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
+            test_cases = all_test_cases[i : i + args.micro_rollout_batch_size]
+            prompt_token_ids = self.tokenize_fn(prompts, self.prompt_max_len, padding=False)["input_ids"]
+
             inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
             sequences, attention_mask, action_mask = self.actor.generate(**inputs, **generate_kwargs)
             samples = Samples(
@@ -261,7 +276,8 @@ class NaiveExperienceMaker(ABC):
                 packed_seq_lens=None,
                 response_length=action_mask.float().sum(dim=-1),
                 total_length=attention_mask.float().sum(dim=-1),
-
+                prompt_token_ids=prompt_token_ids,
+                test_cases=test_cases,
             )
             samples_list.append(samples)
         return samples_list
@@ -283,6 +299,7 @@ class NaiveExperienceMaker(ABC):
         attention_mask = samples.attention_mask
         action_mask = samples.action_mask
         num_actions = samples.num_actions
+        test_cases = samples.test_cases
 
         # log probs
         action_log_probs = self.actor(sequences, num_actions, attention_mask)
@@ -299,11 +316,12 @@ class NaiveExperienceMaker(ABC):
         # rewards
         if self.remote_rm_url is not None:
             # remote RM
-            queries = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-            print("=*100")
-            print(queries)
-            print("=*100")
-            r = remote_rm_fn(self.remote_rm_url, queries=queries).to(device=action_log_probs.device)
+            responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
+            # print("=*100")
+            # print(responses)
+            # print("=*100")
+            r = remote_rm_fn(self.remote_rm_url, responses=responses, test_cases=test_cases).to(device=action_log_probs.device)
+            print(r)
             import sys; sys.exit()
         else:
             # local RM
@@ -495,7 +513,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         When not using vllm, we will fallback to the default implementation,
         in which actor will be used to generate samples.
         """
-        print(all_prompts)
+        print(all_prompts, "ALL PROMPTS")
         import sys; sys.exit()
         prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
         prompt_tokens_to_test_cases = {}
@@ -644,6 +662,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         self.actor.train()  # reset model state
         return experience
 
+    # TODO: Get working with test cases
     def _generate_vllm(self, all_prompts: List[str], **kwargs) -> List[Samples]:
         from vllm import SamplingParams
 

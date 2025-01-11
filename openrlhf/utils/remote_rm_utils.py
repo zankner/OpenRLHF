@@ -29,14 +29,15 @@ def request_api_wrapper(url, data, score_key="rewards", try_max_times=5):
     raise Exception(f"Request error for {try_max_times} times, returning None. Please check the API server.")
 
 
-def remote_rm_fn(api_url, queries, score_key="rewards"):
+def remote_rm_fn(api_url, responses, test_cases, score_key="rewards"):
     """remote reward model API
     api_url: RM API, We assume that the API supports two modes: merging query + response and not merging
-    queries: query+response with the template
-    design is made optional.
+    responses: query+response with the template
+    test_cases: test cases
     score_key: RM score key
     """
-    scores = request_api_wrapper(api_url, {"query": queries}, score_key)
+    # scores = request_api_wrapper(api_url, {"query": queries}, score_key)
+    scores = request_api_wrapper(api_url, {"responses": responses, "test_cases": test_cases}, score_key)
     return torch.tensor(scores)
 
 
