@@ -12,7 +12,7 @@ def preprocess_data(data, input_template=None, input_key="input", apply_chat_tem
         prompt = data[input_key]
         if input_template:
             prompt = input_template.format(prompt)
-    return prompt, data["test_cases"]
+    return prompt, data["test_cases"], data["reward_type"]
 
 class PromptDataset(Dataset):
     """
@@ -45,8 +45,8 @@ class PromptDataset(Dataset):
 
         self.examples = []
         for data in tqdm(dataset, desc="Preprocessing data", disable=not self.strategy.is_rank_0()):
-            prompt, test_cases = preprocess_data(data, input_template, input_key, apply_chat_template)
-            self.examples.append({"prompts": prompt, "test_cases": test_cases})
+            prompt, test_cases, reward_type = preprocess_data(data, input_template, input_key, apply_chat_template)
+            self.examples.append({"prompts": prompt, "test_cases": test_cases, "reward_types": reward_type})
 
     def __len__(self):
         length = len(self.examples)

@@ -115,6 +115,7 @@ class Samples:
     total_length: torch.Tensor
     prompt_token_ids: torch.Tensor
     test_cases: Optional[List[str]]
+    reward_types: Optional[List[str]]
 
 class NaiveExperienceMaker(ABC):
     """
@@ -180,12 +181,6 @@ class NaiveExperienceMaker(ABC):
         args = self.strategy.args
         # generate responses
         samples_list = self.generate_samples(all_prompts, **generate_kwargs)
-        for idx in range(len(samples_list)):
-            print("\n" + "="*100 + "\n")
-            print("PROMPTS\n")
-            print(self.tokenizer.batch_decode(samples_list[idx].prompt_token_ids, skip_special_tokens=False))
-            print("TEST CASES\n")
-            print(samples_list[idx].test_cases)
         torch.distributed.barrier()
 
         experiences = []
@@ -249,9 +244,9 @@ class NaiveExperienceMaker(ABC):
         """
         Generate samples and return in batches.
         """
-        print(all_examples, "ALL EXAMPLES")
         all_prompts = all_examples["prompts"]
         all_test_cases = all_examples["test_cases"]
+        all_reward_types = all_examples["reward_types"]
 
         assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
@@ -264,6 +259,7 @@ class NaiveExperienceMaker(ABC):
         for i in range(0, len(all_prompts), args.micro_rollout_batch_size):
             prompts = all_prompts[i : i + args.micro_rollout_batch_size]
             test_cases = all_test_cases[i : i + args.micro_rollout_batch_size]
+            reward_types = all_reward_types[i : i + args.micro_rollout_batch_size]
             prompt_token_ids = self.tokenize_fn(prompts, self.prompt_max_len, padding=False)["input_ids"]
 
             inputs = self.tokenize_fn(prompts, self.prompt_max_len, device="cuda")
@@ -278,6 +274,7 @@ class NaiveExperienceMaker(ABC):
                 total_length=attention_mask.float().sum(dim=-1),
                 prompt_token_ids=prompt_token_ids,
                 test_cases=test_cases,
+                reward_types=reward_types,
             )
             samples_list.append(samples)
         return samples_list
@@ -300,6 +297,7 @@ class NaiveExperienceMaker(ABC):
         action_mask = samples.action_mask
         num_actions = samples.num_actions
         test_cases = samples.test_cases
+        reward_types = samples.reward_types
 
         # log probs
         action_log_probs = self.actor(sequences, num_actions, attention_mask)
@@ -317,12 +315,7 @@ class NaiveExperienceMaker(ABC):
         if self.remote_rm_url is not None:
             # remote RM
             responses = self.tokenizer.batch_decode(sequences.cpu(), skip_special_tokens=False)
-            # print("=*100")
-            # print(responses)
-            # print("=*100")
-            r = remote_rm_fn(self.remote_rm_url, responses=responses, test_cases=test_cases).to(device=action_log_probs.device)
-            print(r)
-            import sys; sys.exit()
+            r = remote_rm_fn(self.remote_rm_url, responses=responses, test_cases=test_cases, reward_types=reward_types).to(device=action_log_probs.device)
         else:
             # local RM
             r = self.reward_model(sequences, attention_mask)
@@ -513,8 +506,6 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         When not using vllm, we will fallback to the default implementation,
         in which actor will be used to generate samples.
         """
-        print(all_prompts, "ALL PROMPTS")
-        import sys; sys.exit()
         prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
         prompt_tokens_to_test_cases = {}
         if self.vllm_engines is None:
