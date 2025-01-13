@@ -57,6 +57,10 @@ def blending_datasets(
         dataset = dataset.split("@")[0].strip()
         dataset_basename = os.path.basename(dataset)
 
+        print("Current working directory:", os.getcwd())
+        print("List directory: ", os.listdir())
+        print("Dataset path: ", dataset)
+
         ext = os.path.splitext(dataset)[-1]
         # local python script
         if ext == ".py" or (

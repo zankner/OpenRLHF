@@ -506,8 +506,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         When not using vllm, we will fallback to the default implementation,
         in which actor will be used to generate samples.
         """
-        prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-        prompt_tokens_to_test_cases = {}
+        # prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+        # prompt_tokens_to_test_cases = {}
         if self.vllm_engines is None:
             all_samples = super().generate_samples(all_prompts, **generate_kwargs)
         else:
@@ -531,6 +531,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         action_mask = samples.action_mask
         num_actions = samples.num_actions
         packed_seq_lens = samples.packed_seq_lens
+        test_cases = samples.test_cases
+        reward_types = samples.reward_types
 
         start = time.time()
         sequences_cpu, attention_mask_cpu = (
@@ -579,7 +581,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
             for rm in self.remote_rm_url:
-                r = remote_rm_fn_ray.remote(rm, queries=queries)
+                r = remote_rm_fn_ray.remote(rm, responses=queries, test_cases=test_cases, reward_types=reward_types)
                 r_refs.append(r)
 
         # log probs
@@ -654,7 +656,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         return experience
 
     # TODO: Get working with test cases
-    def _generate_vllm(self, all_prompts: List[str], **kwargs) -> List[Samples]:
+    def _generate_vllm(self, all_examples: dict[str, List[str]], **kwargs) -> List[Samples]:
         from vllm import SamplingParams
 
         # round-robin load balance
@@ -678,6 +680,15 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
         )
+
+        all_prompts = all_examples["prompts"]
+        all_test_cases = all_examples["test_cases"]
+        all_reward_types = all_examples["reward_types"]
+
+        prompt_token_id_map = {}
+        prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"] 
+        for i, prompt_tokens in enumerate(prompt_token_ids):
+            prompt_token_id_map[str(prompt_tokens)] = i
 
         # Expand prompt list based on the number of samples per prompt
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
@@ -713,17 +724,28 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 pad_token_id, eos_token_id = self.tokenizer.pad_token_id, self.tokenizer.eos_token_id
                 sequences = []
+                test_cases = []
+                reward_types = []
+                prompt_token_ids = []
                 for output in outputs:
                     # left padding input
                     input_len = len(output.prompt_token_ids)
                     input_ids = [pad_token_id] * (max_input_len - input_len) + list(output.prompt_token_ids)
+                    prompt_token_ids.append(output.prompt_token_ids)
 
                     # right padding output
                     output_len = len(output.outputs[0].token_ids)
                     output_ids = list(output.outputs[0].token_ids) + [pad_token_id] * (max_output_len - output_len)
 
+
                     # concat input and output
                     sequences.append(input_ids + output_ids)
+
+                    # get misc info
+                    test_case = all_test_cases[prompt_token_id_map[str(output.prompt_token_ids)]]
+                    reward_type = all_reward_types[prompt_token_id_map[str(output.prompt_token_ids)]]
+                    test_cases.append(test_case)
+                    reward_types.append(reward_type)
 
                 sequences = torch.tensor(sequences)
                 sequences, attention_mask, action_mask = self.actor.process_sequences(
@@ -741,6 +763,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                         packed_seq_lens=None,
                         response_length=action_mask.float().sum(dim=-1),
                         total_length=attention_mask.float().sum(dim=-1),
+                        prompt_token_ids=prompt_token_ids,
+                        test_cases=test_cases,
+                        reward_types=reward_types,
                     )
                 )
             else:

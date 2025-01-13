@@ -43,8 +43,8 @@ def remote_rm_fn(api_url, responses, test_cases, reward_types, score_key="reward
 
 
 @ray.remote
-def remote_rm_fn_ray(api_url, queries, score_key="rewards"):
-    return remote_rm_fn(api_url, queries, score_key)
+def remote_rm_fn_ray(api_url, responses, test_cases, reward_types, score_key="rewards"):
+    return remote_rm_fn(api_url, responses, test_cases, reward_types, score_key)
 
 
 if __name__ == "__main__":
